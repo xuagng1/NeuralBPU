@@ -15,7 +15,7 @@ class TagePredictor;
 class PREDICTOR{
 private:
     UINT64 GHR;           // global history register
-    static const UINT32 index_bits_hybrid = 8;
+    static const UINT32 index_bits_hybrid = 10;
     
     uint8_t HybridTable[1 << index_bits_hybrid];
     

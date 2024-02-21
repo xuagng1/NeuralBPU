@@ -1,5 +1,5 @@
 #include "predictor.h"
-
+#include <cassert>
 
 #define CTR_MAX  3
 #define CTR_INIT 2
@@ -31,6 +31,8 @@ bool PREDICTOR::GetPrediction(UINT32 PC){
     prediction_tage = _tage->GetPrediction(PC);
     
     int index = (PC >> 2 ^ GHR) & PCmask_hybrid;
+//  assert(prediction_neural != prediction_tage);
+
   //  return prediction_tage;
     return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
 }
@@ -50,13 +52,12 @@ void PREDICTOR::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32
     
     if (prediction_tage == resolveDir && prediction_neural != resolveDir)
     {
-        SatIncrement(HybridTable[index], CTR_MAX);
+        HybridTable[index] = SatIncrement(HybridTable[index], CTR_MAX);
     }
     if (prediction_tage != resolveDir && prediction_neural == resolveDir)
     {
-        SatDecrement(HybridTable[index]);
+        HybridTable[index] = SatDecrement(HybridTable[index]);
     }
-    
     // Update the global history record
     GHR = (GHR << 1) + (resolveDir ? 1 : 0);
 }
