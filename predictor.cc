@@ -33,8 +33,8 @@ bool PREDICTOR::GetPrediction(UINT32 PC){
     int index = (PC >> 2 ^ GHR) & PCmask_hybrid;
 //  assert(prediction_neural != prediction_tage);
 
-    return prediction_neural;
-//    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
+//    return prediction_neural;
+    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
 }
 
 
@@ -108,36 +108,25 @@ NeuralPredictor::NeuralPredictor(void){
 NeuralPredictor::~NeuralPredictor(void){
     delete []_bias;
     delete []_weights;
+  //  delete []t_bias[Neural_BANKS];
 }
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 
 bool NeuralPredictor::GetPrediction(UINT32 PC){
-    bool hit = false;
-    int sum = 0;
-    int out[Neural_BANKS];
-
-    for (int i = 0; i < Neural_BANKS; i++){
-        G_INDEX[i] = get_g_index(PC, i);
-        if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
-            out[i] = 0;
-            for (int j = 0; j < kHistorySize; ++j){
-                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
-                out[i] += weight[i][G_INDEX[i]][j] * xi;
-            }
-            ty_out[i] = out[i];
-            sum += out[i];
-            hit = true;
-        }
-    }
-    if (hit){
-//        printf("sum = %d\n", sum);
-        return sum >= 0;
-//        hit_num++;
-     }
-     else
-         return get_base_pred(PC);
+    get_index(PC);
+    lookup(PC);
+    if (bank == Neural_BANKS)
+        return alt_prediction = get_base_pred(PC);
+    if (alt_bank == Neural_BANKS)
+        alt_prediction = get_base_pred(PC);
+    else
+        alt_prediction = neural_output(PC, alt_bank);
+    if (neural_table[bank][G_INDEX[bank]].ubit != 0)
+        return neural_output(PC, bank);
+    
+    return alt_prediction;
 }
 
 
@@ -146,36 +135,35 @@ bool NeuralPredictor::GetPrediction(UINT32 PC){
 
 void  NeuralPredictor::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget){
 
-    int t = resolveDir ? 1 : -1;
-    for (int i = 0; i < Neural_BANKS; i++){
-        if (sign(ty_out[i]) != t || abs(ty_out[i]) <= kTheta){
-            for (int j = 0; j < kHistorySize; ++j){
-                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
-                int t_wi= weight[i][G_INDEX[i]][j] + xi * t;
-                if (t_wi >= w_min && t_wi <= w_max){
-                    weight[i][G_INDEX[i]][j] = t_wi;
-                }
-            }
+    bool t_alloc = (predDir != resolveDir) & (bank < Neural_BANKS-1);
+    if (bank < Neural_BANKS) {
+        bool table_taken = neural_output(PC, bank);
+        bool pseudo_alloc = (neural_table[bank][G_INDEX[bank]].ubit == 0);
+        if (pseudo_alloc) {
+            if (table_taken == resolveDir)
+                t_alloc = false;
         }
-        //printf("weight[%d][%d][1] = %d\n", j, G_INDEX[j], weight[j][G_INDEX[j]][1]);
-    }
-
-    update_base(PC, resolveDir);
-
-    GHR = ((GHR << 1) + ((t == 1)? 1 : 0));
-
-    //printf("bank = %d\n", bank);
-    if ((predDir != resolveDir)){ 
-        alloc_new_hist(resolveDir, PC);       
-    }
-    if ((predDir == resolveDir) & (bank == Neural_BANKS)){
-        if (neural_table[bank][G_INDEX[bank]].ubit < 3){
-            neural_table[bank][G_INDEX[bank]].ubit ++;
-        }
-        else if (neural_table[bank][G_INDEX[bank]].ubit > 3){
-        neural_table[bank][G_INDEX[bank]].ubit --;
-        }     
     } 
+    //printf("bank = %d, t_alloc = %d\n", bank, t_alloc);
+    if (t_alloc)
+        alloc_new_hist(resolveDir, PC);
+    if (bank == Neural_BANKS)
+        update_base(PC, resolveDir);
+    else 
+        updat_weights(bank, resolveDir);
+    
+    if (predDir != alt_prediction && bank < Neural_BANKS) {
+        if (predDir == resolveDir) {
+            if (neural_table[bank][G_INDEX[bank]].ubit < 3)
+                neural_table[bank][G_INDEX[bank]].ubit ++;
+        }
+        else {
+            if (neural_table[bank][G_INDEX[bank]].ubit > 0)
+                neural_table[bank][G_INDEX[bank]].ubit --;
+        }
+    }
+    GHR = ((GHR << 1) + ((resolveDir)? 1 : 0));    
+
     update_hist(resolveDir, PC);    
     
 }

@@ -41,7 +41,7 @@ public:
 #define CTR_BITS 3
 #define TAG_BITS 11
 
-#define MAX_LENGTH 27     //131
+#define MAX_LENGTH 388     //131
 #define MIN_LENGTH 3
 struct folded_history {
     unsigned hash;
@@ -62,7 +62,7 @@ struct folded_history {
     }
 };
 #define Neural_BANKS 4
-#define Neural_LOG 10
+#define Neural_LOG 8
 struct neural_entry {
     int  tag, ubit;
 };
@@ -76,7 +76,7 @@ private:
     int path_history;
     int G_INDEX[Neural_BANKS];
     int lens[Neural_BANKS]; 
-    int bank;  
+    int bank, alt_bank;  
     // The size of the global history shift register (implemented as a circular buffer)
     static const int kHistorySize = 63;
     // The theta value used as the threshold for determining weight saturation.
@@ -89,8 +89,10 @@ private:
     UINT64 GHR;
     int ty_out[Neural_BANKS];
     int _y_out;
+    bool alt_prediction;
     // The bias, i.e., w_0 for each neural.
     int8_t *_bias;
+    int8_t *t_bias;
     
     // The array of neurals.
     int8_t *_weights;
@@ -106,7 +108,7 @@ private:
     }
     int get_g_index(UINT32 PC, int bank) {
         int index = PC ^
-        (PC >> ((Neural_LOG - N_BANKS + bank + 1))) ^
+        (PC >> ((Neural_LOG - Neural_BANKS + bank + 1))) ^
         comp_hist_i[bank].hash;
         if (lens[bank] >= 16)
             index ^= mix_func(path_history, 16, bank);
@@ -148,16 +150,47 @@ private:
             neural_table[index][G_INDEX[index]].ubit = 0;
         }
     }
-    // void lookup(UINT32 PC){
-    //     bank = Neural_BANKS;
-    //     for (int i = Neural_BANKS-1; i >= 0; i--){
-    //         G_INDEX[i] = get_g_index(PC, i);
-    //         if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
-    //             bank = i;
-    //             break;
-    //         }            
-    //     }
-    // }
+    void get_index(UINT32 PC){
+        for (int i = 0; i < Neural_BANKS; i++){
+            G_INDEX[i] = get_g_index(PC, i);
+        }
+    }
+    void lookup(UINT32 PC){
+        bank = alt_bank = Neural_BANKS;
+        for (int i = Neural_BANKS-1; i >= 0; i--){
+            if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
+                bank = i;
+                break;
+            }            
+        }
+        for (int i = bank - 1; i >= 0; i--){
+            if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
+                alt_bank = i;
+                break;
+            }
+        }
+    }
+    bool neural_output(UINT32 PC, int bank){
+            ty_out[bank] = 0;
+            for (int j = 0; j < kHistorySize; ++j){
+                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
+                ty_out[bank] += weight[bank][G_INDEX[bank]][j] * xi;
+            } 
+            return ty_out[bank] > 0;
+    }
+    void updat_weights(int bank, bool resolveDir){
+        int t = resolveDir ? 1 : -1;
+        if (sign(ty_out[bank]) != t || abs(ty_out[bank]) <= kTheta){
+            for (int j = 0; j < kHistorySize; ++j){
+                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
+                int t_wi= weight[bank][G_INDEX[bank]][j] + xi * t;
+                if (t_wi >= w_min && t_wi <= w_max){
+                    weight[bank][G_INDEX[bank]][j] = t_wi;
+                }
+            }
+        }
+        
+    }
     void update_hist(bool taken, UINT32 PC) {
         path_history = (path_history << 1) + (PC & 1);
         path_history &= (1 << 10) - 1;
