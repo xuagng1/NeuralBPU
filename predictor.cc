@@ -33,8 +33,8 @@ bool PREDICTOR::GetPrediction(UINT32 PC){
     int index = (PC >> 2 ^ GHR) & PCmask_hybrid;
 //  assert(prediction_neural != prediction_tage);
 
-  //  return prediction_tage;
-    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
+    return prediction_neural;
+//    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
 }
 
 
@@ -86,11 +86,23 @@ NeuralPredictor::NeuralPredictor(void){
     kWeightSize = 1 + log2(kTheta);
     
     w_max = (1 << (kWeightSize - 1)) - 1;
-    w_min = -(1 << (kWeightSize - 1));
-    
+    w_min = -(1 << (kWeightSize - 1));  
     _bias = new int8_t[kSize];
     _weights = new int8_t[kSize*kHistorySize];
     GHR = 0x0;
+
+    lens[0] = MIN_LENGTH;
+    lens[Neural_BANKS - 1] = MAX_LENGTH;
+    for (int i =1; i < Neural_BANKS - 1; i++){
+        double temp = pow((double)(MAX_LENGTH - 1) / MIN_LENGTH, (double)i / (Neural_BANKS - 1));
+        lens[i] = (int) (MIN_LENGTH * temp + 0.5);
+    }
+    for (int i = 0; i < Neural_BANKS; i ++) {
+        comp_hist_i[i].create(lens[i], Neural_LOG);
+        comp_hist_t[0][i].create(comp_hist_i[i].ORIGIN_LEN, TAG_BITS - ((i + (Neural_BANKS & 1)) / 2));
+        comp_hist_t[1][i].create(comp_hist_i[i].ORIGIN_LEN, TAG_BITS - ((i + (Neural_BANKS & 1)) / 2) - 1);
+    }
+    
 }
 
 NeuralPredictor::~NeuralPredictor(void){
@@ -102,14 +114,30 @@ NeuralPredictor::~NeuralPredictor(void){
 /////////////////////////////////////////////////////////////
 
 bool NeuralPredictor::GetPrediction(UINT32 PC){
-    int key = get_key(PC);
-    int y = _bias[key];
-    for (int i = 0; i < kHistorySize; ++i) {
-        int xi = (((GHR >> i) & 0x1) == 1) ? 1 : -1;
-        y += _weights[key*kHistorySize+i] * xi;
+    bool hit = false;
+    int sum = 0;
+    int out[Neural_BANKS];
+
+    for (int i = 0; i < Neural_BANKS; i++){
+        G_INDEX[i] = get_g_index(PC, i);
+        if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
+            out[i] = 0;
+            for (int j = 0; j < kHistorySize; ++j){
+                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
+                out[i] += weight[i][G_INDEX[i]][j] * xi;
+            }
+            ty_out[i] = out[i];
+            sum += out[i];
+            hit = true;
+        }
     }
-    _y_out = y;
-    return y >= 0;
+    if (hit){
+//        printf("sum = %d\n", sum);
+        return sum >= 0;
+//        hit_num++;
+     }
+     else
+         return get_base_pred(PC);
 }
 
 
@@ -117,22 +145,39 @@ bool NeuralPredictor::GetPrediction(UINT32 PC){
 /////////////////////////////////////////////////////////////
 
 void  NeuralPredictor::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget){
+
     int t = resolveDir ? 1 : -1;
-    int key = get_key(PC);
-    if (sign(_y_out) != t || abs(_y_out) <= kTheta) {
-        for (int i = 0; i < kHistorySize; ++i) {
-            int xi = (((GHR >> i) & 0x1) == 1) ? 1 : -1;
-            int wi = _weights[key*kHistorySize+i] + t * xi;
-            if (wi >= w_min && wi <= w_max) {
-                _weights[key*kHistorySize+i] = wi;
+    for (int i = 0; i < Neural_BANKS; i++){
+        if (sign(ty_out[i]) != t || abs(ty_out[i]) <= kTheta){
+            for (int j = 0; j < kHistorySize; ++j){
+                int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
+                int t_wi= weight[i][G_INDEX[i]][j] + xi * t;
+                if (t_wi >= w_min && t_wi <= w_max){
+                    weight[i][G_INDEX[i]][j] = t_wi;
+                }
             }
         }
-        int b = _bias[key] + t;
-        if (b >= w_min && b <= w_max) {
-            _bias[key] = b;
-        }
+        //printf("weight[%d][%d][1] = %d\n", j, G_INDEX[j], weight[j][G_INDEX[j]][1]);
     }
+
+    update_base(PC, resolveDir);
+
     GHR = ((GHR << 1) + ((t == 1)? 1 : 0));
+
+    //printf("bank = %d\n", bank);
+    if ((predDir != resolveDir)){ 
+        alloc_new_hist(resolveDir, PC);       
+    }
+    if ((predDir == resolveDir) & (bank == Neural_BANKS)){
+        if (neural_table[bank][G_INDEX[bank]].ubit < 3){
+            neural_table[bank][G_INDEX[bank]].ubit ++;
+        }
+        else if (neural_table[bank][G_INDEX[bank]].ubit > 3){
+        neural_table[bank][G_INDEX[bank]].ubit --;
+        }     
+    } 
+    update_hist(resolveDir, PC);    
+    
 }
 
 /////////////////////////////////////////////////////////////

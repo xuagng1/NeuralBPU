@@ -35,75 +35,14 @@ public:
     void    UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget);
     void    TrackOtherInst(UINT32 PC, OpType opType, UINT32 branchTarget);
 };
-
-
-class NeuralPredictor{
-private:
-    // # neurals.
-    static const int kSize = 512;
-    // The size of the global history shift register (implemented as a circular buffer)
-    static const int kHistorySize = 63;
-    // The theta value used as the threshold for determining weight saturation.
-    int kTheta;
-    // The number of bits each weight can use.
-    int kWeightSize;
-    int w_max;
-    int w_min;
-    
-    UINT64 GHR;
-    
-    int _y_out;
-    // The bias, i.e., w_0 for each neural.
-    int8_t *_bias;
-    
-    // The array of neurals.
-    int8_t *_weights;
-    
-    inline int get_key(UINT32 pc) {
-        return ((pc >> 2) ^ GHR) % kSize;
-    }
-
-    inline int sign(int val) {
-        return (val > 0) - (val < 0);
-    }
-
-public:
-    // The interface to the four functions below CAN NOT be changed
-    NeuralPredictor(void);
-    ~NeuralPredictor(void);
-    // Computes the y value of the neural with the given key.
-    bool    GetPrediction(UINT32 PC);
-    // Trains the neural associated with PC, given its previously-computed
-    // y value as well as t, denoting whether or not the branch was taken.
-    void    UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget);
-    void    UpdateGHR(UINT64 GHR);
-};
-
-
 #define LOG_BASE 13
 #define LOG_GLOBAL 12
 #define N_BANKS 4
 #define CTR_BITS 3
 #define TAG_BITS 11
 
-#define MAX_LENGTH 131
+#define MAX_LENGTH 27     //131
 #define MIN_LENGTH 3
-
-/////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////
-
-struct base_entry {
-    int pred;
-    base_entry(): pred(0) {}
-};
-
-struct global_entry {
-    int ctr, tag, ubit;
-    global_entry(): tag(0), ubit(random() & 3) {
-        ctr = (random() & ((1 << CTR_BITS) - 1)) - (1 << (CTR_BITS - 1));
-    }
-};
-
 struct folded_history {
     unsigned hash;
     int MOD, ORIGIN_LEN, COMPRESSED_LEN;
@@ -120,6 +59,172 @@ struct folded_history {
         hash ^= h[ORIGIN_LEN] << MOD;
         hash ^= (hash >> COMPRESSED_LEN);
         hash &= (1 << COMPRESSED_LEN) - 1;
+    }
+};
+#define Neural_BANKS 4
+#define Neural_LOG 10
+struct neural_entry {
+    int  tag, ubit;
+};
+class NeuralPredictor{
+private:
+    // # neurals.
+    static const int kSize = 512;
+    neural_entry neural_table[Neural_BANKS][1 << Neural_LOG];
+    folded_history comp_hist_i[Neural_BANKS], comp_hist_t[2][Neural_BANKS];
+    bitset<MAX_LENGTH> global_history;
+    int path_history;
+    int G_INDEX[Neural_BANKS];
+    int lens[Neural_BANKS]; 
+    int bank;  
+    // The size of the global history shift register (implemented as a circular buffer)
+    static const int kHistorySize = 63;
+    // The theta value used as the threshold for determining weight saturation.
+    int kTheta;
+    // The number of bits each weight can use.
+    int kWeightSize;
+    int w_max;
+    int w_min;
+    
+    UINT64 GHR;
+    int ty_out[Neural_BANKS];
+    int _y_out;
+    // The bias, i.e., w_0 for each neural.
+    int8_t *_bias;
+    
+    // The array of neurals.
+    int8_t *_weights;
+
+    int8_t weight[Neural_BANKS][1 << Neural_LOG][kHistorySize];
+    
+    inline int get_key(UINT32 pc) {
+        return ((pc >> 2) ^ GHR) % kSize;
+    }
+
+    inline int sign(int val) {
+        return (val > 0) - (val < 0);
+    }
+    int get_g_index(UINT32 PC, int bank) {
+        int index = PC ^
+        (PC >> ((Neural_LOG - N_BANKS + bank + 1))) ^
+        comp_hist_i[bank].hash;
+        if (lens[bank] >= 16)
+            index ^= mix_func(path_history, 16, bank);
+        else
+            index ^= mix_func(path_history, lens[bank], bank);
+        return index & ((1 << Neural_LOG) - 1);
+    }
+    int g_tag(UINT32 PC, int bank) {
+        int temp_tag = PC ^ comp_hist_t[0][bank].hash ^ (comp_hist_t[1][bank].hash << 1);
+        return temp_tag & ((1 << (TAG_BITS - ((bank + (Neural_BANKS & 1)) / 2))) - 1);
+    }
+    
+    int mix_func(int hist, int size, int bank) {
+        hist = hist & ((1 << size) - 1);
+        int temp_2 = hist >> Neural_LOG;
+        temp_2 = ((temp_2 << bank) & ((1 << Neural_LOG) - 1)) + (temp_2 >> (Neural_LOG - bank));
+        int temp_1 = hist & ((1 << Neural_LOG) - 1);
+        hist = temp_1 ^ temp_2;
+        return ((hist << bank) & ((1 << Neural_LOG) - 1)) + (hist >> (Neural_LOG - bank));
+    }
+    void alloc_new_hist(bool taken, UINT32 PC) {
+        int minu = 3, index = 0;
+        for (int i = 0; i < bank; i ++) {
+            if (neural_table[i][G_INDEX[i]].ubit < minu) {
+                minu = neural_table[i][G_INDEX[i]].ubit;
+                index = i;
+            }
+        }
+        if (minu > 0) {
+            for (int i = 0; i < bank; i ++) {
+                neural_table[i][G_INDEX[i]].ubit --;
+            }
+        }
+        else {
+            for(int i = 0; i < kHistorySize; i++){
+                weight[index][G_INDEX[index]][i] = 0;              
+            }
+            neural_table[index][G_INDEX[index]].tag = g_tag(PC, index);
+            neural_table[index][G_INDEX[index]].ubit = 0;
+        }
+    }
+    // void lookup(UINT32 PC){
+    //     bank = Neural_BANKS;
+    //     for (int i = Neural_BANKS-1; i >= 0; i--){
+    //         G_INDEX[i] = get_g_index(PC, i);
+    //         if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
+    //             bank = i;
+    //             break;
+    //         }            
+    //     }
+    // }
+    void update_hist(bool taken, UINT32 PC) {
+        path_history = (path_history << 1) + (PC & 1);
+        path_history &= (1 << 10) - 1;
+        global_history <<= 1;
+        if (taken)
+            global_history = global_history | (bitset<MAX_LENGTH>)1;
+        for (int i = 0; i < Neural_BANKS; i ++) {
+            comp_hist_t[0][i].update(global_history);
+            comp_hist_t[1][i].update(global_history);
+            comp_hist_i[i].update(global_history);
+        }
+    }
+    bool get_base_pred(UINT32 PC) {
+        int key = get_key(PC);
+        int y = _bias[key];
+        for (int i = 0; i < kHistorySize; ++i) {
+            int xi = (((GHR >> i) & 0x1) == 1) ? 1 : -1;
+            y += _weights[key*kHistorySize+i] * xi;
+        }   
+        _y_out = y;
+    //    printf("y = %d\n", y);
+        return y >= 0;
+    }
+    void update_base(UINT32 PC, bool taken) {
+    int t = taken ? 1 : -1;
+    int key = get_key(PC);
+    if (sign(_y_out) != t || abs(_y_out) <= kTheta) {
+        for (int i = 0; i < kHistorySize; ++i) {
+            int xi = (((GHR >> i) & 0x1) == 1) ? 1 : -1;
+            int wi = _weights[key*kHistorySize+i] + t * xi;
+            if (wi >= w_min && wi <= w_max) {
+                _weights[key*kHistorySize+i] = wi;
+            }
+        }
+        int b = _bias[key] + t;
+        if (b >= w_min && b <= w_max) {
+            _bias[key] = b;
+        }
+    }
+       
+    }
+    
+public:
+    // The interface to the four functions below CAN NOT be changed
+    NeuralPredictor(void);
+    ~NeuralPredictor(void);
+    // Computes the y value of the neural with the given key.
+    bool    GetPrediction(UINT32 PC);
+    // Trains the neural associated with PC, given its previously-computed
+    // y value as well as t, denoting whether or not the branch was taken.
+    void    UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget);
+    void    UpdateGHR(UINT64 GHR);
+};
+
+
+/////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+
+struct base_entry {
+    int pred;
+    base_entry(): pred(0) {}
+};
+
+struct global_entry {
+    int ctr, tag, ubit;
+    global_entry(): tag(0), ubit(random() & 3) {
+        ctr = (random() & ((1 << CTR_BITS) - 1)) - (1 << (CTR_BITS - 1));
     }
 };
 
