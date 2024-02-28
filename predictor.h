@@ -41,7 +41,7 @@ public:
 #define CTR_BITS 3
 #define TAG_BITS 11
 
-#define MAX_LENGTH 388     //131
+#define MAX_LENGTH 35     //131
 #define MIN_LENGTH 3
 struct folded_history {
     unsigned hash;
@@ -62,7 +62,7 @@ struct folded_history {
     }
 };
 #define Neural_BANKS 4
-#define Neural_LOG 8
+#define Neural_LOG 9
 struct neural_entry {
     int  tag, ubit;
 };
@@ -157,18 +157,26 @@ private:
     }
     void lookup(UINT32 PC){
         bank = alt_bank = Neural_BANKS;
-        for (int i = Neural_BANKS-1; i >= 0; i--){
+        for (int i = 0; i < Neural_BANKS; i++){
             if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
                 bank = i;
                 break;
             }            
         }
-        for (int i = bank - 1; i >= 0; i--){
+        for (int i = bank + 1; i < Neural_BANKS; i++){
             if (neural_table[i][G_INDEX[i]].tag == g_tag(PC, i)){
                 alt_bank = i;
                 break;
             }
         }
+    }
+    int sum_weights(UINT32 PC, int bank){
+        int sum = 0;
+        for (int j = 0; j < kHistorySize; ++j){
+            int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
+            sum += weight[bank][G_INDEX[bank]][j] * xi;
+        }
+        return sum;
     }
     bool neural_output(UINT32 PC, int bank){
             ty_out[bank] = 0;
@@ -176,7 +184,7 @@ private:
                 int xi = (((GHR >> j) & 0x1) == 1) ? 1 : -1;
                 ty_out[bank] += weight[bank][G_INDEX[bank]][j] * xi;
             } 
-            return ty_out[bank] > 0;
+            return ty_out[bank] >= 0;
     }
     void updat_weights(int bank, bool resolveDir){
         int t = resolveDir ? 1 : -1;

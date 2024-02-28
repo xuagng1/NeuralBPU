@@ -33,8 +33,9 @@ bool PREDICTOR::GetPrediction(UINT32 PC){
     int index = (PC >> 2 ^ GHR) & PCmask_hybrid;
 //  assert(prediction_neural != prediction_tage);
 
-//    return prediction_neural;
-    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
+    return prediction_neural;
+ //   return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
+
 }
 
 
@@ -91,11 +92,11 @@ NeuralPredictor::NeuralPredictor(void){
     _weights = new int8_t[kSize*kHistorySize];
     GHR = 0x0;
 
-    lens[0] = MIN_LENGTH;
-    lens[Neural_BANKS - 1] = MAX_LENGTH;
+    lens[0] = MAX_LENGTH - 1;
+    lens[Neural_BANKS - 1] = MIN_LENGTH;
     for (int i =1; i < Neural_BANKS - 1; i++){
         double temp = pow((double)(MAX_LENGTH - 1) / MIN_LENGTH, (double)i / (Neural_BANKS - 1));
-        lens[i] = (int) (MIN_LENGTH * temp + 0.5);
+        lens[N_BANKS - i - 1] = (int) (MIN_LENGTH * temp + 0.5);
     }
     for (int i = 0; i < Neural_BANKS; i ++) {
         comp_hist_i[i].create(lens[i], Neural_LOG);
@@ -108,7 +109,6 @@ NeuralPredictor::NeuralPredictor(void){
 NeuralPredictor::~NeuralPredictor(void){
     delete []_bias;
     delete []_weights;
-  //  delete []t_bias[Neural_BANKS];
 }
 
 /////////////////////////////////////////////////////////////
@@ -123,7 +123,8 @@ bool NeuralPredictor::GetPrediction(UINT32 PC){
         alt_prediction = get_base_pred(PC);
     else
         alt_prediction = neural_output(PC, alt_bank);
-    if (neural_table[bank][G_INDEX[bank]].ubit != 0)
+    if (neural_table[bank][G_INDEX[bank]].ubit != 0  || sum_weights(PC, bank) != 0)
+ //       printf("neural_output = %d\n", neural_output(PC, bank));
         return neural_output(PC, bank);
     
     return alt_prediction;
@@ -135,10 +136,11 @@ bool NeuralPredictor::GetPrediction(UINT32 PC){
 
 void  NeuralPredictor::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget){
 
-    bool t_alloc = (predDir != resolveDir) & (bank < Neural_BANKS-1);
+    bool t_alloc = (predDir != resolveDir) & (bank > 0);
+ //   printf("bank = %d, t_alloc = %d\n", bank, t_alloc);
     if (bank < Neural_BANKS) {
         bool table_taken = neural_output(PC, bank);
-        bool pseudo_alloc = (neural_table[bank][G_INDEX[bank]].ubit == 0);
+        bool pseudo_alloc = (neural_table[bank][G_INDEX[bank]].ubit == 0 && sum_weights(PC, bank) == 0);
         if (pseudo_alloc) {
             if (table_taken == resolveDir)
                 t_alloc = false;
@@ -150,8 +152,7 @@ void  NeuralPredictor::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir,
     if (bank == Neural_BANKS)
         update_base(PC, resolveDir);
     else 
-        updat_weights(bank, resolveDir);
-    
+        updat_weights(bank, resolveDir); 
     if (predDir != alt_prediction && bank < Neural_BANKS) {
         if (predDir == resolveDir) {
             if (neural_table[bank][G_INDEX[bank]].ubit < 3)
