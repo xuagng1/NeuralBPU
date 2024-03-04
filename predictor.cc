@@ -32,9 +32,12 @@ bool PREDICTOR::GetPrediction(UINT32 PC){
     
     int index = (PC >> 2 ^ GHR) & PCmask_hybrid;
 //  assert(prediction_neural != prediction_tage);
+    if (_tage->hit_table(PC)){
+        return prediction_tage;
+    } else
+        return prediction_neural;
 
-    return prediction_neural;
- //   return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
+//    return HybridTable[index] > 1 ? prediction_tage : prediction_neural;
 
 }
 
@@ -92,11 +95,11 @@ NeuralPredictor::NeuralPredictor(void){
     _weights = new int8_t[kSize*kHistorySize];
     GHR = 0x0;
 
-    lens[0] = MAX_LENGTH - 1;
-    lens[Neural_BANKS - 1] = MIN_LENGTH;
+    lens[0] = 35;
+    lens[Neural_BANKS - 1] = 3;
     for (int i =1; i < Neural_BANKS - 1; i++){
-        double temp = pow((double)(MAX_LENGTH - 1) / MIN_LENGTH, (double)i / (Neural_BANKS - 1));
-        lens[N_BANKS - i - 1] = (int) (MIN_LENGTH * temp + 0.5);
+        double temp = pow((double)(35 - 1) / 3, (double)i / (Neural_BANKS - 1));
+        lens[N_BANKS - i - 1] = (int) (3 * temp + 0.5);
     }
     for (int i = 0; i < Neural_BANKS; i ++) {
         comp_hist_i[i].create(lens[i], Neural_LOG);
@@ -124,7 +127,6 @@ bool NeuralPredictor::GetPrediction(UINT32 PC){
     else
         alt_prediction = neural_output(PC, alt_bank);
     if (neural_table[bank][G_INDEX[bank]].ubit != 0  || sum_weights(PC, bank) != 0)
- //       printf("neural_output = %d\n", neural_output(PC, bank));
         return neural_output(PC, bank);
     
     return alt_prediction;
@@ -175,11 +177,11 @@ void  NeuralPredictor::UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir,
 /////////////////////////////////////////////////////////////
 
 TagePredictor::TagePredictor(void){
-    lens[0] = MAX_LENGTH - 1;
-    lens[N_BANKS - 1] = MIN_LENGTH;
+    lens[0] = 389 - 1;
+    lens[N_BANKS - 1] = 51;
     for (int i = 1; i < N_BANKS - 1; i ++) {
-        double temp = pow((double)(MAX_LENGTH - 1) / MIN_LENGTH, (double)i / (N_BANKS - 1));
-        lens[N_BANKS - i - 1] = (int) (MIN_LENGTH * temp + 0.5);
+        double temp = pow((double)(389 - 1) / 51, (double)i / (N_BANKS - 1));
+        lens[N_BANKS - i - 1] = (int) (51 * temp + 0.5);
     }
     for (int i = 0; i < N_BANKS; i ++) {
         comp_hist_i[i].create(lens[i], LOG_GLOBAL);
@@ -190,7 +192,13 @@ TagePredictor::TagePredictor(void){
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
-
+bool TagePredictor::hit_table(UINT32 PC) {
+    for (int i = 0; i < N_BANKS; i ++) {
+        if (global_table[i][G_INDEX[i]].tag == g_tag(PC, i))
+            return true;
+    }
+    return false;
+}
 bool TagePredictor::GetPrediction(UINT32 PC){
     
     calc_index(PC);

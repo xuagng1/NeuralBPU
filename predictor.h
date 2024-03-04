@@ -41,7 +41,7 @@ public:
 #define CTR_BITS 3
 #define TAG_BITS 11
 
-#define MAX_LENGTH 35     //131
+#define MAX_LENGTH 389     //131
 #define MIN_LENGTH 3
 struct folded_history {
     unsigned hash;
@@ -406,6 +406,7 @@ public:
     // The interface to the four functions below CAN NOT be changed
     
     TagePredictor(void);
+    bool    hit_table(UINT32 PC);
     bool    GetPrediction(UINT32 PC);
     void    UpdatePredictor(UINT32 PC, bool resolveDir, bool predDir, UINT32 branchTarget);
     void    UpdateGHR(UINT64 GHR);
